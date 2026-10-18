@@ -1,1 +1,66 @@
+name: Warband Build
 
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply zip from drop folder
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          zips=(drop/*.zip)
+          if [ ${#zips[@]} -eq 0 ]; then
+            echo "No zip in drop folder"
+            exit 0
+          fi
+          for z in "${zips[@]}"; do
+            tmp=$(mktemp -d)
+            unzip -q -o "$z" -d "$tmp"
+            rm -rf "$tmp/__MACOSX"
+            root="$tmp"
+            entries=("$tmp"/*)
+            if [ ${#entries[@]} -eq 1 ] && [ -d "${entries[0]}" ]; then
+              root="${entries[0]}"
+            fi
+            rm -rf "$root/.github" "$root/drop" "$root/.git"
+            cp -a "$root"/. .
+            git rm -q -f "$z"
+            rm -rf "$tmp"
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Apply game update from drop folder"
+          git push origin HEAD:"${GITHUB_REF_NAME:-main}"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Write google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+          fi
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warband-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
